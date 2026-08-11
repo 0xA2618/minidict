@@ -4,6 +4,8 @@ import SQLite3
 import Vision
 import CoreGraphics
 import Darwin
+import CryptoKit
+import Combine
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
@@ -67,14 +69,17 @@ final class DictionaryStore {
 // MARK: - 划词取词（模拟 ⌘C + 剪贴板交换）
 
 final class SelectionGrabber {
+    var isGrabbing = false
     static let shared = SelectionGrabber()
 
     func grab(completion: @escaping (String?) -> Void) {
+        isGrabbing = true
         let pb = NSPasteboard.general
         let saved = pb.string(forType: .string)
         pb.clearContents()
 
         guard let src = CGEventSource(stateID: .combinedSessionState) else {
+            isGrabbing = false
             completion(nil)
             return
         }
@@ -91,12 +96,78 @@ final class SelectionGrabber {
             pb.clearContents()
             if let s = saved, !s.isEmpty { pb.setString(s, forType: .string) }
             
+            self.isGrabbing = false
             if let t = text, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 completion(t)
             } else if let s = saved, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 completion(s)
             } else {
                 completion(nil)
+            }
+        }
+    }
+}
+
+final class ClipboardTracker: ObservableObject {
+    static let shared = ClipboardTracker()
+    private let pasteboard = NSPasteboard.general
+    private var timer: Timer?
+    private let historyLimit = 50
+    
+    @Published var selectedIndex: Int = 0
+    @Published var showToken: Int = 0
+    @Published var searchText: String = "" {
+        didSet {
+            if selectedIndex >= filteredHistory.count {
+                selectedIndex = 0
+            }
+        }
+    }
+    private var lastChangeCount: Int = 0
+    
+    @Published var history: [String] = [] {
+        didSet {
+            UserDefaults.standard.set(history, forKey: "clipboard_history")
+        }
+    }
+
+    var filteredHistory: [String] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return history }
+        return history.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private init() {
+        lastChangeCount = pasteboard.changeCount
+        if let savedHistory = UserDefaults.standard.array(forKey: "clipboard_history") as? [String] {
+            history = savedHistory
+        }
+    }
+
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.checkPasteboard()
+        }
+    }
+
+    func clear() {
+        history.removeAll()
+        selectedIndex = 0
+        searchText = ""
+    }
+
+    private func checkPasteboard() {
+        guard !SelectionGrabber.shared.isGrabbing else { return }
+        let currentChangeCount = pasteboard.changeCount
+        guard currentChangeCount != lastChangeCount else { return }
+        lastChangeCount = currentChangeCount
+        
+        if let newContent = pasteboard.string(forType: .string), !newContent.isEmpty {
+            if newContent != history.first {
+                history.insert(newContent, at: 0)
+                if history.count > historyLimit {
+                    history.removeLast()
+                }
             }
         }
     }
@@ -149,12 +220,105 @@ final class OCRService {
 final class Translator {
     static let shared = Translator()
 
+    var currentEngineName: String {
+        switch SettingsManager.shared.engine {
+        case .myMemory: return "MyMemory"
+        case .openAI: return "OpenAI (\(SettingsManager.shared.openAIConfig.model))"
+        case .youdao: return "有道智云"
+        }
+    }
+
     func translate(_ text: String, sourceIsChinese: Bool, completion: @escaping (Result<String, Error>) -> Void) {
-        if SettingsManager.shared.engine == .openAI {
+        switch SettingsManager.shared.engine {
+        case .openAI:
             translateWithOpenAI(text, sourceIsChinese: sourceIsChinese, completion: completion)
-        } else {
+        case .youdao:
+            translateWithYoudao(text, sourceIsChinese: sourceIsChinese, completion: completion)
+        case .myMemory:
             translateWithMyMemory(text, sourceIsChinese: sourceIsChinese, completion: completion)
         }
+    }
+
+    private func translateWithYoudao(_ text: String, sourceIsChinese: Bool, completion: @escaping (Result<String, Error>) -> Void) {
+        let config = SettingsManager.shared.youdaoConfig
+        let appKey = config.appKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appSecret = config.appSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !appKey.isEmpty, !appSecret.isEmpty else {
+            completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "请在设置中填写有道 AppKey 和 AppSecret"])))
+            return
+        }
+        
+        let fromLang = sourceIsChinese ? "zh-CHS" : "en"
+        let toLang = sourceIsChinese ? "en" : "zh-CHS"
+        let salt = UUID().uuidString
+        let curtime = String(Int(Date().timeIntervalSince1970))
+        
+        let input: String
+        if text.count <= 20 {
+            input = text
+        } else {
+            let prefix = String(text.prefix(10))
+            let suffix = String(text.suffix(10))
+            input = prefix + String(text.count) + suffix
+        }
+        
+        let signStr = appKey + input + salt + curtime + appSecret
+        guard let data = signStr.data(using: .utf8) else {
+            completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "签名串编码失败"])))
+            return
+        }
+        
+        let hash = SHA256.hash(data: data)
+        let sign = hash.compactMap { String(format: "%02x", $0) }.joined()
+        
+        var comps = URLComponents()
+        let queryItems = [
+            URLQueryItem(name: "q", value: text),
+            URLQueryItem(name: "from", value: fromLang),
+            URLQueryItem(name: "to", value: toLang),
+            URLQueryItem(name: "appKey", value: appKey),
+            URLQueryItem(name: "salt", value: salt),
+            URLQueryItem(name: "sign", value: sign),
+            URLQueryItem(name: "signType", value: "v3"),
+            URLQueryItem(name: "curtime", value: curtime)
+        ]
+        comps.queryItems = queryItems
+        guard let query = comps.percentEncodedQuery else {
+            completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "请求参数构建失败"])))
+            return
+        }
+        
+        var req = URLRequest(url: URL(string: "https://openapi.youdao.com/api")!)
+        req.httpMethod = "POST"
+        req.addValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.httpBody = query.data(using: .utf8)
+        req.timeoutInterval = 12
+        
+        URLSession.shared.dataTask(with: req) { data, _, err in
+            if let err = err {
+                completion(.failure(err))
+                return
+            }
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "解析有道响应失败"])))
+                return
+            }
+            
+            let errorCode = obj["errorCode"] as? String ?? "unknown"
+            if errorCode != "0" {
+                completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "有道 API 报错，错误码: \(errorCode)"])))
+                return
+            }
+            
+            guard let translation = obj["translation"] as? [String], let translated = translation.first else {
+                completion(.failure(NSError(domain: "MiniDict", code: -1, userInfo: [NSLocalizedDescriptionKey: "有道未返回翻译结果"])))
+                return
+            }
+            
+            completion(.success(translated))
+        }.resume()
     }
 
     private func translateWithOpenAI(_ text: String, sourceIsChinese: Bool, completion: @escaping (Result<String, Error>) -> Void) {

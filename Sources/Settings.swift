@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Carbon.HIToolbox
 import AppKit
+import ServiceManagement
 
 struct ShortcutConfig: Codable, Equatable {
     var modifier: UInt32
@@ -14,9 +15,15 @@ struct OpenAIConfig: Codable, Equatable {
     var model: String = "gpt-4o-mini"
 }
 
+struct YoudaoConfig: Codable, Equatable {
+    var appKey: String = ""
+    var appSecret: String = ""
+}
+
 enum TranslationEngine: String, Codable, CaseIterable {
     case myMemory = "MyMemory (免费内置)"
     case openAI = "自定义 AI 大模型 (需填 Key)"
+    case youdao = "有道智云翻译 (需填 Key)"
 }
 
 class SettingsManager: ObservableObject {
@@ -25,9 +32,12 @@ class SettingsManager: ObservableObject {
     @Published var selectionShortcut: ShortcutConfig { didSet { save() } }
     @Published var inputShortcut: ShortcutConfig { didSet { save() } }
     @Published var ocrShortcut: ShortcutConfig { didSet { save() } }
+    @Published var clipboardShortcut: ShortcutConfig { didSet { save() } }
     
     @Published var engine: TranslationEngine { didSet { save() } }
     @Published var openAIConfig: OpenAIConfig { didSet { save() } }
+    @Published var youdaoConfig: YoudaoConfig { didSet { save() } }
+    @Published var launchAtLogin: Bool { didSet { save(); updateLaunchAtLogin() } }
     
     @Published var englishVoice: String { didSet { save() } }
     @Published var chineseVoice: String { didSet { save() } }
@@ -35,8 +45,11 @@ class SettingsManager: ObservableObject {
     private let selectionKey = "shortcut_selection"
     private let inputKey = "shortcut_input"
     private let ocrKey = "shortcut_ocr"
+    private let clipboardKey = "shortcut_clipboard"
     private let engineKey = "engine_type"
     private let openaiKey = "openai_config"
+    private let youdaoKey = "youdao_config"
+    private let launchAtLoginKey = "launch_at_login"
     private let enVoiceKey = "enVoiceIdentifier"
     private let zhVoiceKey = "zhVoiceIdentifier"
     
@@ -63,20 +76,66 @@ class SettingsManager: ObservableObject {
             ocrShortcut = ShortcutConfig(modifier: UInt32(optionKey), keyCode: UInt32(kVK_ANSI_S))
         }
         
+        if let data = defaults.data(forKey: clipboardKey), let conf = try? JSONDecoder().decode(ShortcutConfig.self, from: data) {
+            clipboardShortcut = conf
+        } else {
+            clipboardShortcut = ShortcutConfig(modifier: UInt32(cmdKey | shiftKey), keyCode: 8)
+        }
+        
         if let data = defaults.string(forKey: engineKey), let e = TranslationEngine(rawValue: data) {
             engine = e
         } else {
             engine = .myMemory
         }
         
-        if let data = defaults.data(forKey: openaiKey), let conf = try? JSONDecoder().decode(OpenAIConfig.self, from: data) {
+        if let data = defaults.data(forKey: openaiKey), var conf = try? JSONDecoder().decode(OpenAIConfig.self, from: data) {
+            if conf.apiKey.isEmpty {
+                conf.url = "https://api.openai.com/v1/chat/completions"
+                conf.apiKey = ""
+                conf.model = "gpt-4o-mini"
+            }
             openAIConfig = conf
         } else {
             openAIConfig = OpenAIConfig()
         }
         
+        if let data = defaults.data(forKey: youdaoKey), let conf = try? JSONDecoder().decode(YoudaoConfig.self, from: data) {
+            youdaoConfig = conf
+        } else {
+            youdaoConfig = YoudaoConfig()
+        }
+        
+        if #available(macOS 13.0, *) {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        } else {
+            launchAtLogin = defaults.bool(forKey: launchAtLoginKey)
+        }
+        
         englishVoice = defaults.string(forKey: enVoiceKey) ?? "edge_tts"
         chineseVoice = defaults.string(forKey: zhVoiceKey) ?? "edge_tts"
+    }
+    
+    private func updateLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            let service = SMAppService.mainApp
+            if launchAtLogin {
+                if service.status != .enabled {
+                    do {
+                        try service.register()
+                    } catch {
+                        NSLog("[MiniDict] 注册开机自启失败: \(error)")
+                    }
+                }
+            } else {
+                if service.status == .enabled {
+                    do {
+                        try service.unregister()
+                    } catch {
+                        NSLog("[MiniDict] 注销开机自启失败: \(error)")
+                    }
+                }
+            }
+        }
     }
     
     private func save() {
@@ -84,9 +143,12 @@ class SettingsManager: ObservableObject {
         if let data = try? JSONEncoder().encode(selectionShortcut) { defaults.set(data, forKey: selectionKey) }
         if let data = try? JSONEncoder().encode(inputShortcut) { defaults.set(data, forKey: inputKey) }
         if let data = try? JSONEncoder().encode(ocrShortcut) { defaults.set(data, forKey: ocrKey) }
+        if let data = try? JSONEncoder().encode(clipboardShortcut) { defaults.set(data, forKey: clipboardKey) }
         
         defaults.set(engine.rawValue, forKey: engineKey)
         if let data = try? JSONEncoder().encode(openAIConfig) { defaults.set(data, forKey: openaiKey) }
+        if let data = try? JSONEncoder().encode(youdaoConfig) { defaults.set(data, forKey: youdaoKey) }
+        defaults.set(launchAtLogin, forKey: launchAtLoginKey)
         
         defaults.set(englishVoice, forKey: enVoiceKey)
         defaults.set(chineseVoice, forKey: zhVoiceKey)
@@ -150,6 +212,7 @@ struct SettingsView: View {
                     ShortcutPickerView(title: "划词翻译", config: $vm.selectionShortcut)
                     ShortcutPickerView(title: "输入翻译", config: $vm.inputShortcut)
                     ShortcutPickerView(title: "截图 OCR", config: $vm.ocrShortcut)
+                    ShortcutPickerView(title: "剪贴板历史", config: $vm.clipboardShortcut)
                 }
                 Spacer()
             }
@@ -185,6 +248,27 @@ struct SettingsView: View {
                             .padding(.leading, 88)
                     }
                 }
+                
+                if vm.engine == .youdao {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("应用 ID:").frame(width: 80, alignment: .trailing)
+                            TextField("有道智云 AppKey", text: $vm.youdaoConfig.appKey)
+                        }
+                        HStack {
+                            Text("应用密钥:").frame(width: 80, alignment: .trailing)
+                            SecureField("有道智云 AppSecret", text: $vm.youdaoConfig.appSecret)
+                        }
+                        Text("需要注册有道智云并开通“文本翻译”服务获取 AppKey 和 AppSecret。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 88)
+                    }
+                }
+                
+                Divider()
+                Toggle("开机自动启动", isOn: $vm.launchAtLogin)
                 Spacer()
             }
             .padding(24)

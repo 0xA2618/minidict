@@ -1,15 +1,233 @@
 import AppKit
-
-import AppKit
 import SwiftUI
+import Combine
+
+struct ClipboardHistoryView: View {
+    @ObservedObject var tracker = ClipboardTracker.shared
+    @FocusState private var searchFocused: Bool
+    
+    var onSelect: (String) -> Void
+    var onClear: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("搜索剪贴板历史", text: $tracker.searchText)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                if !tracker.searchText.isEmpty {
+                    Button(action: { tracker.searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if tracker.filteredHistory.isEmpty {
+                Text(tracker.history.isEmpty ? "剪贴板历史为空" : "无匹配结果")
+                    .foregroundColor(.secondary)
+                    .padding()
+            } else {
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(tracker.filteredHistory.indices, id: \.self) { index in
+                            Text(tracker.filteredHistory[index])
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(index == tracker.selectedIndex ? Color.accentColor.opacity(0.3) : Color.clear)
+                                .cornerRadius(4)
+                                .onTapGesture {
+                                    tracker.selectedIndex = index
+                                    onSelect(tracker.filteredHistory[index])
+                                }
+                                .id(index) // For ScrollViewReader
+                        }
+                    }
+                    .onChange(of: tracker.selectedIndex) { _, newIndex in
+                        proxy.scrollTo(newIndex, anchor: .center)
+                    }
+                }
+            }
+            
+            Divider()
+            
+            HStack {
+                Button("清空记录") {
+                    onClear()
+                }
+                .buttonStyle(.link)
+                .foregroundColor(.red)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+        .frame(minWidth: 300, minHeight: 200)
+        .onAppear { searchFocused = true }
+        .onChange(of: tracker.showToken) { _, _ in
+            searchFocused = true
+        }
+    }
+}
+
+final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelegate {
+    static let shared = ClipboardHistoryWindowController()
+    
+    private let vm = ClipboardTracker.shared
+    private var monitor: Any?
+    
+    init() {
+        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                          styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                          backing: .buffered, defer: false)
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
+        win.isMovableByWindowBackground = true
+        win.backgroundColor = NSColor.windowBackgroundColor
+        win.level = .floating
+        win.hidesOnDeactivate = true
+        win.isFloatingPanel = true
+        win.setFrameAutosaveName("ClipboardHistoryWindow")
+        
+        super.init(window: win)
+        win.delegate = self
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        
+        let rootView = ClipboardHistoryView(onSelect: { [weak self] text in
+            self?.paste(text: text)
+        }, onClear: { [weak self] in
+            self?.vm.clear()
+        })
+        win.contentView = NSHostingView(rootView: rootView)
+        
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+            guard self.window?.isKeyWindow ?? false else { return event }
+
+            switch event.keyCode {
+            case 53: // Esc
+                if !self.vm.searchText.isEmpty {
+                    self.vm.searchText = ""
+                } else {
+                    self.hide()
+                }
+                return nil
+            case 36: // Enter
+                let list = self.vm.filteredHistory
+                if !list.isEmpty && list.indices.contains(self.vm.selectedIndex) {
+                    self.paste(text: list[self.vm.selectedIndex])
+                }
+                return nil
+            case 126: // Arrow Up
+                if !self.vm.filteredHistory.isEmpty {
+                    self.vm.selectedIndex = max(0, self.vm.selectedIndex - 1)
+                }
+                return nil
+            case 125: // Arrow Down
+                let list = self.vm.filteredHistory
+                if !list.isEmpty {
+                    self.vm.selectedIndex = min(list.count - 1, self.vm.selectedIndex + 1)
+                }
+                return nil
+            default:
+                break
+            }
+            return event
+        }
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.hidesOnDeactivate = false
+        
+        if !(window?.isVisible ?? false) {
+            positionNearMouse()
+        }
+        
+        window?.makeKeyAndOrderFront(nil)
+        window?.hidesOnDeactivate = true
+        
+        vm.searchText = ""
+        vm.selectedIndex = 0
+        vm.showToken += 1
+    }
+    
+    func hide() {
+        window?.orderOut(nil)
+    }
+    
+    private func positionNearMouse() {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.main, let win = window else { return }
+        let vf = screen.visibleFrame
+        var p = NSPoint(x: mouse.x - win.frame.width / 2, y: mouse.y - win.frame.height / 2)
+        p.x = min(max(p.x, vf.minX + 8), vf.maxX - win.frame.width - 8)
+        p.y = min(max(p.y, vf.minY + 8), vf.maxY - win.frame.height - 8)
+        win.setFrameOrigin(p)
+    }
+    
+    private func paste(text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        
+        hide()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let src = CGEventSource(stateID: .combinedSessionState)
+            let down = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: true) // V key
+            down?.flags = .maskCommand
+            down?.post(tap: .cghidEventTap)
+            let up = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: false) // V key
+            up?.flags = .maskCommand
+            up?.post(tap: .cghidEventTap)
+        }
+    }
+    
+    func windowDidResignKey(_ notification: Notification) {
+        if let win = window, win.hidesOnDeactivate {
+            win.orderOut(nil)
+        }
+    }
+}
 
 class TranslationViewModel: ObservableObject {
     @Published var inputText: String = ""
     @Published var original: String?
     @Published var ipa: String?
     @Published var translation: String?
+    @Published var translationSource: String?
     @Published var card: DictCard?
     @Published var status: String?
+
+    func clearAll() {
+        inputText = ""
+        original = nil
+        ipa = nil
+        translation = nil
+        translationSource = nil
+        card = nil
+        status = nil
+    }
+
+    func clearResult() {
+        original = nil
+        ipa = nil
+        translation = nil
+        translationSource = nil
+        card = nil
+        status = nil
+    }
 }
 
 struct TranslationMainView: View {
@@ -26,7 +244,25 @@ struct TranslationMainView: View {
                 .frame(height: 120)
                 .background(Color.clear)
             
-            HStack {
+            HStack(spacing: 12) {
+                Button(action: {
+                    vm.clearAll()
+                }) {
+                    Label("清空", systemImage: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+
+                Button(action: {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(vm.inputText, forType: .string)
+                }) {
+                    Label("复制", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+
                 if vm.original != nil || vm.card != nil {
                     Button(action: onSpeakOriginal) {
                         Label("朗读原文", systemImage: "speaker.wave.2")
@@ -62,6 +298,14 @@ struct TranslationMainView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 Text(card.word)
                                     .font(.system(size: 24, weight: .bold, design: .serif))
+                                
+                                Text("本地词典")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.secondary.opacity(0.1))
+                                    .cornerRadius(4)
                                 
                                 if let ph = card.phonetics {
                                     Text(ph)
@@ -112,7 +356,11 @@ struct TranslationMainView: View {
                             if let t = vm.translation {
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
-                                        Text("翻译").font(.caption).foregroundColor(.secondary)
+                                        if let src = vm.translationSource {
+                                            Text("翻译 (\(src))").font(.caption).foregroundColor(.secondary)
+                                        } else {
+                                            Text("翻译").font(.caption).foregroundColor(.secondary)
+                                        }
                                         Spacer()
                                         Button(action: {
                                             let pb = NSPasteboard.general
@@ -145,7 +393,7 @@ struct TranslationMainView: View {
             .frame(maxHeight: .infinity)
             .background(Color(NSColor.textBackgroundColor))
         }
-        .frame(minWidth: 350, minHeight: 450)
+        .frame(minWidth: 480, minHeight: 450)
         .background(Color(NSColor.windowBackgroundColor))
     }
 }
@@ -157,7 +405,7 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
     var onTranslate: ((String) -> Void)?
     
     init() {
-        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
+        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 500),
                           styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                           backing: .buffered, defer: false)
         win.titlebarAppearsTransparent = true
@@ -227,6 +475,7 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         window?.hidesOnDeactivate = true
         
+        vm.clearResult()
         vm.inputText = text
         if autoTranslate {
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -254,12 +503,14 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
         vm.original = original
         vm.ipa = ipa
         vm.translation = translation
+        vm.translationSource = nil
         vm.status = nil
         vm.card = card
     }
     
-    func setTranslation(_ text: String) {
+    func setTranslation(_ text: String, source: String? = nil) {
         vm.translation = text
+        vm.translationSource = source
         vm.status = nil
     }
     

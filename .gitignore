@@ -1,2 +1,7 @@
 build/
 .DS_Store
+.omo
+AGENTS.md
+opencode.json
+start.sh
+handoff.md

@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         _ = DictionaryStore.shared
+        ClipboardTracker.shared.start()
         TranslationWindowController.shared.onTranslate = { [weak self] text in
             self?.performTranslation(text)
         }
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "划词翻译  ⌥D", action: #selector(actionSelection), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "输入翻译  ⌥A", action: #selector(actionInput), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "截图 OCR  ⌥S", action: #selector(actionOCR), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "剪贴板历史  ⌘⇧C", action: #selector(actionClipboardHistory), keyEquivalent: ""))
         menu.addItem(.separator())
         let perm = NSMenuItem(title: "权限：检查中…", action: nil, keyEquivalent: "")
         perm.isEnabled = false
@@ -107,6 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeyManager.shared.register(keyCode: sm.ocrShortcut.keyCode, modifiers: sm.ocrShortcut.modifier, id: 3) { [weak self] in
             self?.actionOCR()
+        }
+        HotKeyManager.shared.register(keyCode: sm.clipboardShortcut.keyCode, modifiers: sm.clipboardShortcut.modifier, id: 4) { [weak self] in
+            self?.actionClipboardHistory()
         }
     }
 
@@ -157,6 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func actionClipboardHistory() {
+        ClipboardHistoryWindowController.shared.show()
+    }
+
     private func performTranslation(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -177,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Translator.shared.translate(trimmed, sourceIsChinese: false) { r in
                         DispatchQueue.main.async {
                             switch r {
-                            case .success(let t): TranslationWindowController.shared.setTranslation(t)
+                            case .success(let t): TranslationWindowController.shared.setTranslation(t, source: Translator.shared.currentEngineName)
                             case .failure: TranslationWindowController.shared.setStatus(nil)
                             }
                         }
@@ -189,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Translator.shared.translate(trimmed, sourceIsChinese: false) { r in
                     DispatchQueue.main.async {
                         switch r {
-                        case .success(let t): TranslationWindowController.shared.setTranslation(t)
+                        case .success(let t): TranslationWindowController.shared.setTranslation(t, source: Translator.shared.currentEngineName)
                         case .failure(let err): TranslationWindowController.shared.setStatus("翻译失败（\(err.localizedDescription)）")
                         }
                     }
@@ -202,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     switch r {
                     case .success(let en):
-                        TranslationWindowController.shared.setTranslation(en)
+                        TranslationWindowController.shared.setTranslation(en, source: Translator.shared.currentEngineName)
                     case .failure(let err): TranslationWindowController.shared.setStatus("翻译失败（\(err.localizedDescription)）")
                     }
                 }
