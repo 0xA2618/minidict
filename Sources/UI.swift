@@ -147,6 +147,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
     required init?(coder: NSCoder) { fatalError() }
     
     func show() {
+        AppFocusManager.shared.recordFrontmostApp()
         NSApp.activate(ignoringOtherApps: true)
         window?.hidesOnDeactivate = false
         
@@ -164,6 +165,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
     
     func hide() {
         window?.orderOut(nil)
+        AppFocusManager.shared.restorePreviousApp()
     }
     
     private func positionNearMouse() {
@@ -197,6 +199,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
     func windowDidResignKey(_ notification: Notification) {
         if let win = window, win.hidesOnDeactivate {
             win.orderOut(nil)
+            AppFocusManager.shared.restorePreviousApp()
         }
     }
 }
@@ -439,7 +442,7 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
         
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             if ev.keyCode == 53, let win = self?.window, win.isVisible {
-                win.orderOut(nil)
+                self?.hide()
                 Speaker.shared.stop()
                 return nil
             }
@@ -465,6 +468,7 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
     }
     
     func showWindowWithText(_ text: String, autoTranslate: Bool) {
+        AppFocusManager.shared.recordFrontmostApp()
         NSApp.activate(ignoringOtherApps: true)
         window?.hidesOnDeactivate = false
         
@@ -483,6 +487,11 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
                 onTranslate?(t)
             }
         }
+    }
+
+    func hide() {
+        window?.orderOut(nil)
+        AppFocusManager.shared.restorePreviousApp()
     }
     
     private func positionNearMouse() {
@@ -522,6 +531,7 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
         if let win = window, win.hidesOnDeactivate {
             win.orderOut(nil)
             Speaker.shared.stop()
+            AppFocusManager.shared.restorePreviousApp()
         }
     }
 }
@@ -551,12 +561,18 @@ final class CaptureOverlay {
 
         let view = CaptureOverlayView(frame: NSRect(origin: .zero, size: frame.size))
         view.onDone = { [weak self] rect in
-            self?.cancel()
-            self?.onComplete?(rect)
+            if rect == .zero {
+                self?.cancel(restoreFocus: true)
+                self?.onComplete?(rect)
+            } else {
+                self?.cancel(restoreFocus: false)
+                self?.onComplete?(rect)
+            }
         }
         win.contentView = view
         win.setFrameOrigin(frame.origin)
 
+        AppFocusManager.shared.recordFrontmostApp()
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
         win.makeFirstResponder(view)
@@ -564,7 +580,7 @@ final class CaptureOverlay {
 
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             if ev.keyCode == 53, let win = self?.window, win.isVisible {
-                self?.cancel()
+                self?.cancel(restoreFocus: true)
                 self?.onComplete?(.zero)
                 return nil
             }
@@ -572,13 +588,16 @@ final class CaptureOverlay {
         }
     }
 
-    func cancel() {
+    func cancel(restoreFocus: Bool = true) {
         if let m = escMonitor {
             NSEvent.removeMonitor(m)
             escMonitor = nil
         }
         window?.orderOut(nil)
         window = nil
+        if restoreFocus {
+            AppFocusManager.shared.restorePreviousApp()
+        }
     }
 }
 

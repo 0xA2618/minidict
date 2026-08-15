@@ -116,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func actionSelection() {
+        AppFocusManager.shared.recordFrontmostApp()
         refreshPermissionStatus()
         guard Permissions.ensureAX() else { return }
         SelectionGrabber.shared.grab { [weak self] text in
@@ -131,11 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func actionInput() {
+        AppFocusManager.shared.recordFrontmostApp()
         refreshPermissionStatus()
         TranslationWindowController.shared.showWindowWithText("", autoTranslate: false)
     }
 
     @objc private func actionOCR() {
+        AppFocusManager.shared.recordFrontmostApp()
         refreshPermissionStatus()
         guard !ocrInProgress else { return }
         guard Permissions.ensureScreenRecording() else { return }
@@ -163,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func actionClipboardHistory() {
+        AppFocusManager.shared.recordFrontmostApp()
         ClipboardHistoryWindowController.shared.show()
     }
 

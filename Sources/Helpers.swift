@@ -50,3 +50,24 @@ func parseDictCard(word: String, e: DictionaryStore.Entry) -> DictCard {
     }
     return DictCard(word: word, phonetics: phoneticLine(e), meanings: meanings, exchanges: exchanges)
 }
+
+final class AppFocusManager {
+    static let shared = AppFocusManager()
+    private(set) var previousApp: NSRunningApplication?
+
+    func recordFrontmostApp() {
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
+            previousApp = frontmost
+        }
+    }
+
+    func restorePreviousApp() {
+        let app = previousApp
+        previousApp = nil
+        if let app = app, !app.isTerminated {
+            app.activate()
+        }
+        NSApp.hide(nil)
+    }
+}

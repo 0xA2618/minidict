@@ -84,25 +84,50 @@ class SettingsManager: ObservableObject {
         
         if let data = defaults.string(forKey: engineKey), let e = TranslationEngine(rawValue: data) {
             engine = e
+        } else if !EnvConfig.defaultEngine.isEmpty {
+            switch EnvConfig.defaultEngine.lowercased() {
+            case "openai", "deepseek": engine = .openAI
+            case "youdao": engine = .youdao
+            case "mymemory": engine = .myMemory
+            default:
+                engine = TranslationEngine(rawValue: EnvConfig.defaultEngine) ?? (!EnvConfig.openAIApiKey.isEmpty ? .openAI : .myMemory)
+            }
+        } else if !EnvConfig.openAIApiKey.isEmpty {
+            engine = .openAI
         } else {
             engine = .myMemory
         }
         
         if let data = defaults.data(forKey: openaiKey), var conf = try? JSONDecoder().decode(OpenAIConfig.self, from: data) {
-            if conf.apiKey.isEmpty {
+            if conf.apiKey.isEmpty && !EnvConfig.openAIApiKey.isEmpty {
+                conf.apiKey = EnvConfig.openAIApiKey
+                if !EnvConfig.openAIUrl.isEmpty { conf.url = EnvConfig.openAIUrl }
+                if !EnvConfig.openAIModel.isEmpty { conf.model = EnvConfig.openAIModel }
+            } else if conf.apiKey.isEmpty {
                 conf.url = "https://api.openai.com/v1/chat/completions"
                 conf.apiKey = ""
                 conf.model = "gpt-4o-mini"
             }
             openAIConfig = conf
         } else {
-            openAIConfig = OpenAIConfig()
+            var conf = OpenAIConfig()
+            if !EnvConfig.openAIApiKey.isEmpty { conf.apiKey = EnvConfig.openAIApiKey }
+            if !EnvConfig.openAIUrl.isEmpty { conf.url = EnvConfig.openAIUrl }
+            if !EnvConfig.openAIModel.isEmpty { conf.model = EnvConfig.openAIModel }
+            openAIConfig = conf
         }
         
-        if let data = defaults.data(forKey: youdaoKey), let conf = try? JSONDecoder().decode(YoudaoConfig.self, from: data) {
+        if let data = defaults.data(forKey: youdaoKey), var conf = try? JSONDecoder().decode(YoudaoConfig.self, from: data) {
+            if conf.appKey.isEmpty && !EnvConfig.youdaoAppKey.isEmpty {
+                conf.appKey = EnvConfig.youdaoAppKey
+                conf.appSecret = EnvConfig.youdaoAppSecret
+            }
             youdaoConfig = conf
         } else {
-            youdaoConfig = YoudaoConfig()
+            var conf = YoudaoConfig()
+            if !EnvConfig.youdaoAppKey.isEmpty { conf.appKey = EnvConfig.youdaoAppKey }
+            if !EnvConfig.youdaoAppSecret.isEmpty { conf.appSecret = EnvConfig.youdaoAppSecret }
+            youdaoConfig = conf
         }
         
         if #available(macOS 13.0, *) {
@@ -299,7 +324,7 @@ struct SettingsView: View {
     }
 }
 
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     static let shared = SettingsWindowController()
     
     init() {
@@ -312,12 +337,18 @@ final class SettingsWindowController: NSWindowController {
         win.contentView = NSHostingView(rootView: SettingsView())
         
         super.init(window: win)
+        win.delegate = self
     }
     
     required init?(coder: NSCoder) { fatalError() }
     
     func show() {
+        AppFocusManager.shared.recordFrontmostApp()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        AppFocusManager.shared.restorePreviousApp()
     }
 }
