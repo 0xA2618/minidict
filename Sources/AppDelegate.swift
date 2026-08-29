@@ -151,9 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 TranslationWindowController.shared.showWindowWithText("截图失败", autoTranslate: false)
                 return
             }
+            let screenshotItem = ClipboardTracker.shared.addScreenshot(cgImage: img)
             TranslationWindowController.shared.showWindowWithText("识别中…", autoTranslate: false)
             OCRService.shared.recognize(image: img) { text in
                 DispatchQueue.main.async {
+                    if let t = text, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ClipboardTracker.shared.updateOCRText(id: screenshotItem?.id, text: t)
+                    }
                     guard let t = text,
                           !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         TranslationWindowController.shared.showWindowWithText("未识别到文字", autoTranslate: false)

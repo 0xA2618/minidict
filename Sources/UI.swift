@@ -6,10 +6,10 @@ struct ClipboardHistoryView: View {
     @ObservedObject var tracker = ClipboardTracker.shared
     @FocusState private var searchFocused: Bool
     
-    var onSelect: (String) -> Void
+    var onSelect: (ClipboardItem) -> Void
     var onClear: () -> Void
 
-    private var selectedItem: String? {
+    private var selectedItem: ClipboardItem? {
         let list = tracker.filteredHistory
         if !list.isEmpty && list.indices.contains(tracker.selectedIndex) {
             return list[tracker.selectedIndex]
@@ -58,8 +58,6 @@ struct ClipboardHistoryView: View {
                                 ForEach(tracker.filteredHistory.indices, id: \.self) { index in
                                     let item = tracker.filteredHistory[index]
                                     let isSelected = index == tracker.selectedIndex
-                                    let preview = item.replacingOccurrences(of: "\n", with: " ")
-                                        .trimmingCharacters(in: .whitespacesAndNewlines)
                                     
                                     HStack(spacing: 8) {
                                         Text("\(index + 1)")
@@ -67,12 +65,43 @@ struct ClipboardHistoryView: View {
                                             .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary.opacity(0.7))
                                             .frame(width: 20, alignment: .trailing)
                                         
-                                        Text(preview)
-                                            .font(.system(size: 13))
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                            .foregroundColor(isSelected ? .white : .primary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        if item.type == .image {
+                                            if let path = item.imagePath, let img = ImageStorageManager.shared.loadImage(filename: path) {
+                                                Image(nsImage: img)
+                                                    .resizable()
+                                                    .aspectRatio(contentMode: .fill)
+                                                    .frame(width: 32, height: 22)
+                                                    .clipped()
+                                                    .cornerRadius(3)
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 3)
+                                                            .stroke(isSelected ? Color.white.opacity(0.4) : Color.secondary.opacity(0.2), lineWidth: 1)
+                                                    )
+                                            } else {
+                                                Image(systemName: "photo")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(isSelected ? .white : .secondary)
+                                                    .frame(width: 32, height: 22)
+                                            }
+                                            
+                                            let desc = item.ocrText?.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                                            Text(desc?.isEmpty == false ? desc! : "图片 (\(Int(item.imageWidth ?? 0)) × \(Int(item.imageHeight ?? 0)))")
+                                                .font(.system(size: 13))
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+                                                .foregroundColor(isSelected ? .white : .primary)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        } else {
+                                            let preview = (item.text ?? "").replacingOccurrences(of: "\n", with: " ")
+                                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                            
+                                            Text(preview)
+                                                .font(.system(size: 13))
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+                                                .foregroundColor(isSelected ? .white : .primary)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
                                     }
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 6)
@@ -121,34 +150,104 @@ struct ClipboardHistoryView: View {
 
             VStack(spacing: 0) {
                 if let current = selectedItem {
-                    HStack {
-                        Label("\(current.count) 字符 · \(current.split(separator: "\n", omittingEmptySubsequences: false).count) 行", systemImage: "doc.plaintext")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("按 Enter 复制")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.8))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.1))
-                            .cornerRadius(4)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(NSColor.windowBackgroundColor))
+                    if current.type == .image {
+                        HStack {
+                            Label("图片 · \(Int(current.imageWidth ?? 0)) × \(Int(current.imageHeight ?? 0))", systemImage: "photo")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("按 Enter 复制图片")
+                                .font(.caption2)
+                                .foregroundColor(.secondary.opacity(0.8))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.1))
+                                .cornerRadius(4)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(NSColor.windowBackgroundColor))
 
-                    Divider()
+                        Divider()
 
-                    ScrollView {
-                        Text(current)
-                            .font(.system(size: 13))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                if let path = current.imagePath, let img = ImageStorageManager.shared.loadImage(filename: path) {
+                                    Image(nsImage: img)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxWidth: .infinity, maxHeight: 260)
+                                        .background(Color.black.opacity(0.04))
+                                        .cornerRadius(8)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                                        )
+                                }
+                                
+                                if let ocr = current.ocrText, !ocr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack {
+                                            Label("OCR 识别内容", systemImage: "text.viewfinder")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Spacer()
+                                            Button(action: {
+                                                let pb = NSPasteboard.general
+                                                pb.clearContents()
+                                                pb.setString(ocr, forType: .string)
+                                            }) {
+                                                Image(systemName: "doc.on.doc")
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .help("复制识别文本")
+                                        }
+                                        Text(ocr)
+                                            .font(.system(size: 13))
+                                            .textSelection(.enabled)
+                                            .padding(10)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(Color.secondary.opacity(0.06))
+                                            .cornerRadius(6)
+                                    }
+                                }
+                            }
                             .padding(12)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(NSColor.textBackgroundColor))
+                    } else {
+                        let text = current.text ?? ""
+                        HStack {
+                            Label("\(text.count) 字符 · \(text.split(separator: "\n", omittingEmptySubsequences: false).count) 行", systemImage: "doc.plaintext")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("按 Enter 复制文本")
+                                .font(.caption2)
+                                .foregroundColor(.secondary.opacity(0.8))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.1))
+                                .cornerRadius(4)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(NSColor.windowBackgroundColor))
+
+                        Divider()
+
+                        ScrollView {
+                            Text(text)
+                                .font(.system(size: 13))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding(12)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(NSColor.textBackgroundColor))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(NSColor.textBackgroundColor))
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "doc.on.clipboard")
@@ -196,8 +295,8 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
         win.delegate = self
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         
-        let rootView = ClipboardHistoryView(onSelect: { [weak self] text in
-            self?.selectItem(text: text)
+        let rootView = ClipboardHistoryView(onSelect: { [weak self] item in
+            self?.selectItem(item)
         }, onClear: { [weak self] in
             self?.vm.clear()
         })
@@ -218,7 +317,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
             case 36: // Enter
                 let list = self.vm.filteredHistory
                 if !list.isEmpty && list.indices.contains(self.vm.selectedIndex) {
-                    self.selectItem(text: list[self.vm.selectedIndex])
+                    self.selectItem(list[self.vm.selectedIndex])
                 }
                 return nil
             case 126: // Arrow Up
@@ -273,10 +372,26 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
         win.setFrameOrigin(p)
     }
     
-    private func selectItem(text: String) {
+    private func selectItem(_ item: ClipboardItem) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        
+        switch item.type {
+        case .text:
+            if let text = item.text {
+                pb.setString(text, forType: .string)
+            }
+        case .image:
+            if let filename = item.imagePath,
+               let image = ImageStorageManager.shared.loadImage(filename: filename),
+               let tiffData = image.tiffRepresentation {
+                pb.setData(tiffData, forType: .tiff)
+                if let bitmapRep = NSBitmapImageRep(data: tiffData),
+                   let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+                    pb.setData(pngData, forType: .png)
+                }
+            }
+        }
         
         hide()
     }

@@ -108,11 +108,78 @@ final class SelectionGrabber {
     }
 }
 
+final class ImageStorageManager {
+    static let shared = ImageStorageManager()
+    private let directory: URL
+    
+    private init() {
+        let fileManager = FileManager.default
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        directory = appSupport.appendingPathComponent("MiniDict/Images", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+    }
+    
+    func saveImage(_ image: CGImage) -> (filename: String, width: Double, height: Double)? {
+        let width = Double(image.width)
+        let height = Double(image.height)
+        let filename = "\(UUID().uuidString).png"
+        let fileURL = directory.appendingPathComponent(filename)
+        
+        let bitmapRep = NSBitmapImageRep(cgImage: image)
+        guard let data = bitmapRep.representation(using: .png, properties: [:]) else { return nil }
+        do {
+            try data.write(to: fileURL)
+            return (filename, width, height)
+        } catch {
+            return nil
+        }
+    }
+    
+    func saveImage(data: Data) -> (filename: String, width: Double, height: Double)? {
+        guard let nsImage = NSImage(data: data),
+              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return saveImage(cgImage)
+    }
+    
+    func loadImage(filename: String) -> NSImage? {
+        let url = directory.appendingPathComponent(filename)
+        return NSImage(contentsOf: url)
+    }
+    
+    func deleteImage(filename: String) {
+        let url = directory.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: url)
+    }
+    
+    func clearAll() {
+        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+    }
+}
+
+enum ClipboardItemType: String, Codable {
+    case text
+    case image
+}
+
+struct ClipboardItem: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var type: ClipboardItemType
+    var text: String?
+    var imagePath: String?
+    var imageWidth: Double?
+    var imageHeight: Double?
+    var timestamp: Date = Date()
+    var ocrText: String?
+}
+
 final class ClipboardTracker: ObservableObject {
     static let shared = ClipboardTracker()
     private let pasteboard = NSPasteboard.general
     private var timer: Timer?
     private let historyLimit = 50
+    private let storageKey = "clipboard_items_history"
+    private var lastDataHash: Int = 0
     
     @Published var selectedIndex: Int = 0
     @Published var showToken: Int = 0
@@ -125,22 +192,48 @@ final class ClipboardTracker: ObservableObject {
     }
     private var lastChangeCount: Int = 0
     
-    @Published var history: [String] = [] {
+    @Published var history: [ClipboardItem] = [] {
         didSet {
-            UserDefaults.standard.set(history, forKey: "clipboard_history")
+            saveHistory()
         }
     }
 
-    var filteredHistory: [String] {
+    var filteredHistory: [ClipboardItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return history }
-        return history.filter { $0.localizedCaseInsensitiveContains(query) }
+        return history.filter { item in
+            if let t = item.text, t.localizedCaseInsensitiveContains(query) {
+                return true
+            }
+            if let ocr = item.ocrText, ocr.localizedCaseInsensitiveContains(query) {
+                return true
+            }
+            if item.type == .image && ("图片".contains(query) || "截图".contains(query) || "image".localizedCaseInsensitiveContains(query)) {
+                return true
+            }
+            return false
+        }
     }
 
     private init() {
         lastChangeCount = pasteboard.changeCount
-        if let savedHistory = UserDefaults.standard.array(forKey: "clipboard_history") as? [String] {
-            history = savedHistory
+        loadHistory()
+    }
+
+    private func loadHistory() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let saved = try? JSONDecoder().decode([ClipboardItem].self, from: data) {
+            history = saved
+        } else if let oldStrings = UserDefaults.standard.array(forKey: "clipboard_history") as? [String] {
+            history = oldStrings.map { ClipboardItem(type: .text, text: $0) }
+            UserDefaults.standard.removeObject(forKey: "clipboard_history")
+            saveHistory()
+        }
+    }
+
+    private func saveHistory() {
+        if let data = try? JSONEncoder().encode(history) {
+            UserDefaults.standard.set(data, forKey: storageKey)
         }
     }
 
@@ -151,9 +244,46 @@ final class ClipboardTracker: ObservableObject {
     }
 
     func clear() {
+        ImageStorageManager.shared.clearAll()
         history.removeAll()
         selectedIndex = 0
         searchText = ""
+    }
+
+    func addScreenshot(cgImage: CGImage) -> ClipboardItem? {
+        guard let saved = ImageStorageManager.shared.saveImage(cgImage) else { return nil }
+        let item = ClipboardItem(
+            type: .image,
+            text: nil,
+            imagePath: saved.filename,
+            imageWidth: saved.width,
+            imageHeight: saved.height,
+            timestamp: Date(),
+            ocrText: nil
+        )
+        addItem(item)
+        return item
+    }
+
+    func updateOCRText(id: UUID?, text: String) {
+        guard let targetId = id else { return }
+        if let index = history.firstIndex(where: { $0.id == targetId }) {
+            history[index].ocrText = text
+            saveHistory()
+        }
+    }
+
+    private func addItem(_ item: ClipboardItem) {
+        if item.type == .text, let t = item.text, history.first?.text == t {
+            return
+        }
+        history.insert(item, at: 0)
+        if history.count > historyLimit {
+            let removed = history.removeLast()
+            if let path = removed.imagePath {
+                ImageStorageManager.shared.deleteImage(filename: path)
+            }
+        }
     }
 
     private func checkPasteboard() {
@@ -161,13 +291,42 @@ final class ClipboardTracker: ObservableObject {
         let currentChangeCount = pasteboard.changeCount
         guard currentChangeCount != lastChangeCount else { return }
         lastChangeCount = currentChangeCount
-        
-        if let newContent = pasteboard.string(forType: .string), !newContent.isEmpty {
-            if newContent != history.first {
-                history.insert(newContent, at: 0)
-                if history.count > historyLimit {
-                    history.removeLast()
+
+        if let types = pasteboard.types,
+           types.contains(.png) || types.contains(.tiff),
+           let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff),
+           data.count > 100 {
+            let hash = data.hashValue
+            if hash != lastDataHash {
+                lastDataHash = hash
+                if let saved = ImageStorageManager.shared.saveImage(data: data) {
+                    let item = ClipboardItem(
+                        type: .image,
+                        text: nil,
+                        imagePath: saved.filename,
+                        imageWidth: saved.width,
+                        imageHeight: saved.height,
+                        timestamp: Date(),
+                        ocrText: nil
+                    )
+                    addItem(item)
+                    return
                 }
+            }
+        }
+
+        if let newContent = pasteboard.string(forType: .string), !newContent.isEmpty {
+            if history.first?.text != newContent {
+                let item = ClipboardItem(
+                    type: .text,
+                    text: newContent,
+                    imagePath: nil,
+                    imageWidth: nil,
+                    imageHeight: nil,
+                    timestamp: Date(),
+                    ocrText: nil
+                )
+                addItem(item)
             }
         }
     }
