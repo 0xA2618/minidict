@@ -9,68 +9,162 @@ struct ClipboardHistoryView: View {
     var onSelect: (String) -> Void
     var onClear: () -> Void
 
+    private var selectedItem: String? {
+        let list = tracker.filteredHistory
+        if !list.isEmpty && list.indices.contains(tracker.selectedIndex) {
+            return list[tracker.selectedIndex]
+        }
+        return nil
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("搜索剪贴板历史", text: $tracker.searchText)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                if !tracker.searchText.isEmpty {
-                    Button(action: { tracker.searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("搜索剪贴板历史", text: $tracker.searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                    if !tracker.searchText.isEmpty {
+                        Button(action: { tracker.searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
 
-            Divider()
+                Divider()
 
-            if tracker.filteredHistory.isEmpty {
-                Text(tracker.history.isEmpty ? "剪贴板历史为空" : "无匹配结果")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ScrollViewReader { proxy in
-                    List {
-                        ForEach(tracker.filteredHistory.indices, id: \.self) { index in
-                            Text(tracker.filteredHistory[index])
-                                .padding(.vertical, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(index == tracker.selectedIndex ? Color.accentColor.opacity(0.3) : Color.clear)
-                                .cornerRadius(4)
-                                .onTapGesture {
-                                    tracker.selectedIndex = index
-                                    onSelect(tracker.filteredHistory[index])
+                if tracker.filteredHistory.isEmpty {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 28))
+                            .foregroundColor(.secondary.opacity(0.6))
+                        Text(tracker.history.isEmpty ? "剪贴板历史为空" : "无匹配结果")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 2) {
+                                ForEach(tracker.filteredHistory.indices, id: \.self) { index in
+                                    let item = tracker.filteredHistory[index]
+                                    let isSelected = index == tracker.selectedIndex
+                                    let preview = item.replacingOccurrences(of: "\n", with: " ")
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    
+                                    HStack(spacing: 8) {
+                                        Text("\(index + 1)")
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary.opacity(0.7))
+                                            .frame(width: 20, alignment: .trailing)
+                                        
+                                        Text(preview)
+                                            .font(.system(size: 13))
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .foregroundColor(isSelected ? .white : .primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(isSelected ? Color.accentColor : Color.clear)
+                                    .cornerRadius(6)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        tracker.selectedIndex = index
+                                        onSelect(item)
+                                    }
+                                    .id(index)
                                 }
-                                .id(index) // For ScrollViewReader
+                            }
+                            .padding(6)
+                        }
+                        .onChange(of: tracker.selectedIndex) { _, newIndex in
+                            proxy.scrollTo(newIndex, anchor: .center)
                         }
                     }
-                    .onChange(of: tracker.selectedIndex) { _, newIndex in
-                        proxy.scrollTo(newIndex, anchor: .center)
+                }
+
+                Divider()
+
+                HStack {
+                    Button("清空记录") {
+                        onClear()
+                    }
+                    .buttonStyle(.link)
+                    .foregroundColor(.red)
+
+                    Spacer()
+
+                    if !tracker.filteredHistory.isEmpty {
+                        Text("共 \(tracker.filteredHistory.count) 条")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             }
-            
+            .frame(width: 280)
+            .background(Color(NSColor.windowBackgroundColor))
+
             Divider()
-            
-            HStack {
-                Button("清空记录") {
-                    onClear()
+
+            VStack(spacing: 0) {
+                if let current = selectedItem {
+                    HStack {
+                        Label("\(current.count) 字符 · \(current.split(separator: "\n", omittingEmptySubsequences: false).count) 行", systemImage: "doc.plaintext")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("按 Enter 复制")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.8))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(NSColor.windowBackgroundColor))
+
+                    Divider()
+
+                    ScrollView {
+                        Text(current)
+                            .font(.system(size: 13))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(12)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(NSColor.textBackgroundColor))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 32))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("选择左侧记录以预览详情")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(NSColor.textBackgroundColor))
                 }
-                .buttonStyle(.link)
-                .foregroundColor(.red)
-                
-                Spacer()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 300, minHeight: 200)
+        .frame(minWidth: 600, minHeight: 340)
         .onAppear { searchFocused = true }
         .onChange(of: tracker.showToken) { _, _ in
             searchFocused = true
@@ -85,9 +179,10 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
     private var monitor: Any?
     
     init() {
-        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+        let win = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 380),
                           styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                           backing: .buffered, defer: false)
+        win.minSize = NSSize(width: 540, height: 280)
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
