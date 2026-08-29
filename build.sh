@@ -92,11 +92,12 @@ ls -lh "$APP/Contents/MacOS/MiniDict" "$APP/Contents/Resources/dict.sqlite"
 # 自动杀死正在运行的旧版本进程并启动新版本
 echo "🔄 正在重启应用..."
 killall MiniDict 2>/dev/null || true
+sleep 0.5
 if [ -d "/Applications/MiniDict.app" ]; then
     rm -rf /Applications/MiniDict.app
     cp -R "$APP" /Applications/
-    open -a /Applications/MiniDict.app || open "$APP"
+    open /Applications/MiniDict.app || open "$APP"
 else
-    open -a "$APP" || open "$APP"
+    open "$APP"
 fi
 echo "🚀 MiniDict 已重新启动！"

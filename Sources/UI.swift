@@ -102,7 +102,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         
         let rootView = ClipboardHistoryView(onSelect: { [weak self] text in
-            self?.paste(text: text)
+            self?.selectItem(text: text)
         }, onClear: { [weak self] in
             self?.vm.clear()
         })
@@ -123,7 +123,7 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
             case 36: // Enter
                 let list = self.vm.filteredHistory
                 if !list.isEmpty && list.indices.contains(self.vm.selectedIndex) {
-                    self.paste(text: list[self.vm.selectedIndex])
+                    self.selectItem(text: list[self.vm.selectedIndex])
                 }
                 return nil
             case 126: // Arrow Up
@@ -178,22 +178,12 @@ final class ClipboardHistoryWindowController: NSWindowController, NSWindowDelega
         win.setFrameOrigin(p)
     }
     
-    private func paste(text: String) {
+    private func selectItem(text: String) {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
         
         hide()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            let src = CGEventSource(stateID: .combinedSessionState)
-            let down = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: true) // V key
-            down?.flags = .maskCommand
-            down?.post(tap: .cghidEventTap)
-            let up = CGEvent(keyboardEventSource: src, virtualKey: 0x09, keyDown: false) // V key
-            up?.flags = .maskCommand
-            up?.post(tap: .cghidEventTap)
-        }
     }
     
     func windowDidResignKey(_ notification: Notification) {
