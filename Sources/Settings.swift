@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Carbon.HIToolbox
 import AppKit
+import AVFoundation
 import ServiceManagement
 
 struct ShortcutConfig: Codable, Equatable {
@@ -41,6 +42,7 @@ class SettingsManager: ObservableObject {
     
     @Published var englishVoice: String { didSet { save() } }
     @Published var chineseVoice: String { didSet { save() } }
+    @Published var speechRate: Double { didSet { save() } }
     
     private let selectionKey = "shortcut_selection"
     private let inputKey = "shortcut_input"
@@ -52,6 +54,7 @@ class SettingsManager: ObservableObject {
     private let launchAtLoginKey = "launch_at_login"
     private let enVoiceKey = "enVoiceIdentifier"
     private let zhVoiceKey = "zhVoiceIdentifier"
+    private let speechRateKey = "speech_rate_multiplier"
     
     var onShortcutsChanged: (() -> Void)?
     
@@ -136,8 +139,22 @@ class SettingsManager: ObservableObject {
             launchAtLogin = defaults.bool(forKey: launchAtLoginKey)
         }
         
-        englishVoice = defaults.string(forKey: enVoiceKey) ?? "edge_tts"
-        chineseVoice = defaults.string(forKey: zhVoiceKey) ?? "edge_tts"
+        if let savedEn = defaults.string(forKey: enVoiceKey),
+           (savedEn == "youdao_us" || savedEn == "youdao_uk" || savedEn.hasPrefix("kokoro_") || savedEn == "edge_tts" || AVSpeechSynthesisVoice(identifier: savedEn) != nil) {
+            englishVoice = savedEn
+        } else {
+            englishVoice = "youdao_us"
+        }
+
+        if let savedZh = defaults.string(forKey: zhVoiceKey),
+           (savedZh == "edge_tts" || AVSpeechSynthesisVoice(identifier: savedZh) != nil) {
+            chineseVoice = savedZh
+        } else {
+            chineseVoice = AVSpeechSynthesisVoice(language: "zh-CN")?.identifier ?? "com.apple.voice.compact.zh-CN.Tingting"
+        }
+
+        let savedRate = defaults.double(forKey: speechRateKey)
+        speechRate = savedRate > 0.0 ? savedRate : 1.0
     }
     
     private func updateLaunchAtLogin() {
@@ -177,6 +194,7 @@ class SettingsManager: ObservableObject {
         
         defaults.set(englishVoice, forKey: enVoiceKey)
         defaults.set(chineseVoice, forKey: zhVoiceKey)
+        defaults.set(speechRate, forKey: speechRateKey)
         
         onShortcutsChanged?()
     }
@@ -311,8 +329,20 @@ struct SettingsView: View {
                         Text(Speaker.shared.displayName(for: id)).tag(id)
                     }
                 }
+
+                HStack {
+                    Text("发音速度:")
+                    Slider(value: $vm.speechRate, in: 0.6...1.4, step: 0.05)
+                    Text(String(format: "%.2fx", vm.speechRate))
+                        .frame(width: 48, alignment: .trailing)
+                        .font(.system(.body, design: .monospaced))
+                    Button("重置") {
+                        vm.speechRate = 1.0
+                    }
+                    .controlSize(.small)
+                }
                 
-                Text("“微软 Edge 神经网络音色”需要保持电脑联网，音质最接近真人。")
+                Text("“Kokoro-82M”与系统语音均支持语速调节；朗读时支持单词变色实时高亮。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()

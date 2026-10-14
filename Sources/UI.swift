@@ -412,6 +412,8 @@ class TranslationViewModel: ObservableObject {
     @Published var translationSource: String?
     @Published var card: DictCard?
     @Published var status: String?
+    @Published var highlightedRange: NSRange?
+    @Published var highlightedTextTarget: String?
 
     func clearAll() {
         inputText = ""
@@ -421,6 +423,8 @@ class TranslationViewModel: ObservableObject {
         translationSource = nil
         card = nil
         status = nil
+        highlightedRange = nil
+        highlightedTextTarget = nil
     }
 
     func clearResult() {
@@ -430,6 +434,37 @@ class TranslationViewModel: ObservableObject {
         translationSource = nil
         card = nil
         status = nil
+        highlightedRange = nil
+        highlightedTextTarget = nil
+    }
+}
+
+struct HighlightedTextView: View {
+    let fullText: String
+    let highlightedRange: NSRange?
+    let font: Font
+
+    var body: some View {
+        Text(attributedText)
+            .font(font)
+    }
+
+    private var attributedText: AttributedString {
+        var astr = AttributedString(fullText)
+        guard let nsRange = highlightedRange,
+              let swiftRange = Range(nsRange, in: fullText),
+              let attrRange = AttributedString.Index(swiftRange.lowerBound, within: astr).flatMap({ lower in
+                  AttributedString.Index(swiftRange.upperBound, within: astr).map { upper in
+                      lower..<upper
+                  }
+              }) else {
+            return astr
+        }
+
+        astr[attrRange].backgroundColor = Color.yellow.opacity(0.65)
+        astr[attrRange].foregroundColor = Color.black
+        astr[attrRange].inlinePresentationIntent = .stronglyEmphasized
+        return astr
     }
 }
 
@@ -441,11 +476,27 @@ struct TranslationMainView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextEditor(text: $vm.inputText)
-                .font(.system(size: 16))
-                .padding(8)
-                .frame(height: 120)
-                .background(Color.clear)
+            ZStack(alignment: .topLeading) {
+                if let target = vm.highlightedTextTarget,
+                   target == vm.inputText,
+                   let range = vm.highlightedRange {
+                    HighlightedTextView(
+                        fullText: vm.inputText,
+                        highlightedRange: range,
+                        font: .system(size: 16)
+                    )
+                    .padding(8)
+                    .frame(maxWidth: .infinity, maxHeight: 120, alignment: .topLeading)
+                    .allowsHitTesting(false)
+                }
+
+                TextEditor(text: $vm.inputText)
+                    .font(.system(size: 16))
+                    .padding(8)
+                    .frame(height: 120)
+                    .opacity(vm.highlightedTextTarget == vm.inputText && vm.highlightedRange != nil ? 0.01 : 1.0)
+                    .background(Color.clear)
+            }
             
             HStack(spacing: 12) {
                 Button(action: {
@@ -576,7 +627,12 @@ struct TranslationMainView: View {
                                         .buttonStyle(.plain)
                                         .help("复制翻译结果")
                                     }
-                                    Text(t).font(.system(size: 15)).textSelection(.enabled)
+                                    HighlightedTextView(
+                                        fullText: t,
+                                        highlightedRange: vm.highlightedTextTarget == t ? vm.highlightedRange : nil,
+                                        font: .system(size: 15)
+                                    )
+                                    .textSelection(.enabled)
                                 }
                             }
                             if let ipa = vm.ipa {
@@ -631,12 +687,31 @@ final class TranslationWindowController: NSWindowController, NSWindowDelegate {
             self.onTranslate?(text)
         }, onSpeakOriginal: { [weak self] in
             guard let self = self else { return }
-            let text = self.vm.original ?? self.vm.inputText
+            let text = self.vm.card?.word ?? self.vm.original ?? self.vm.inputText
+            self.vm.highlightedTextTarget = self.vm.card?.word ?? self.vm.original ?? self.vm.inputText
             Speaker.shared.speak(text, language: containsChinese(text) ? "zh" : "en")
         }, onSpeakTranslation: { [weak self] in
-            guard let t = self?.vm.translation else { return }
+            guard let self = self, let t = self.vm.translation else { return }
+            self.vm.highlightedTextTarget = t
             Speaker.shared.speak(t, language: containsChinese(t) ? "zh" : "en")
         })
+
+        Speaker.shared.onWordHighlight = { [weak self] range, fullText in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.vm.highlightedRange = range
+                if self.vm.highlightedTextTarget == nil {
+                    self.vm.highlightedTextTarget = fullText
+                }
+            }
+        }
+        Speaker.shared.onSpeechEnded = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.vm.highlightedRange = nil
+                self.vm.highlightedTextTarget = nil
+            }
+        }
         
         win.contentView = NSHostingView(rootView: rootView)
         

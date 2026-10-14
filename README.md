@@ -48,8 +48,10 @@ xattr -cr /Applications/MiniDict.app
    - 支持在设置中无缝切换为**自定义 AI 大模型**（如 OpenAI、DeepSeek、豆包等）。
 
 4. **高级发音系统 (TTS)**：
-   - 集成了系统原生的优质发音（如 macOS 15 最新的 Sandy、Tingting 音色）。
-   - 内置了调用 **微软 Edge 神经网络语音 (Edge TTS)** 的逻辑，通过调用本地环境安装好的 Python 库实现媲美字节豆包等云端大厂的极度自然发音。
+   - **真人原声（默认推荐）**：接入高品质标准真人美音/英音发音，纯正地道，告别机械合成音。
+   - **现代原生音频支持**：使用 macOS 现代化 `AVFoundation` 引擎驱动，支持系统内各种原生离线音色（如 Samantha、Tingting 等）。
+   - **多层降级容灾**：当离线断网或 Edge TTS 接口不可用时，自动无缝降级回退到本地原生引擎，确保随时点击都有声音。
+   - 仍保留调用 **微软 Edge 神经网络语音 (Edge TTS)** 的选项，用户可在设置中自由切换。
 
 ## 技术栈与架构
 - **语言**：Swift (Swift 5/6), 纯代码，无 storyboard。
@@ -58,7 +60,7 @@ xattr -cr /Applications/MiniDict.app
   - `Carbon.HIToolbox` 用于注册全局快捷键 (Global Hotkeys)。
   - `Vision` 框架处理图片到文本的 OCR。
   - `SQLite3` 极速查询本地 10M+ 的词库。
-  - `AVFoundation` 和 `NSSpeechSynthesizer` 进行多引擎音频播放。
+  - `AVFoundation` 进行多引擎音频播放与现代语音合成。
 - **构建方式**：通过 `build.sh` 直接使用 `swiftc` 命令行编译打包，无需繁重的 Xcode 工程文件，且内置了生成自签名证书的逻辑以绕过 macOS 的权限重置痛点。`build.sh` 会同时编译 **Apple Silicon (arm64)** 与 **Intel (x86_64)** 两个版本并通过 `lipo` 合并为 Universal 二进制。
 
 ## 未来维护指南
